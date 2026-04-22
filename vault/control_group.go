@@ -12,6 +12,7 @@ import (
 	"github.com/openbao/openbao/sdk/v2/helper/locksutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/openbao/openbao/sdk/v2/plugin/pb"
+	"github.com/openbao/openbao/vault/policy"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -61,7 +62,7 @@ var controlGroupAuthorizeResponseSchema = map[string]*framework.FieldSchema{
 }
 
 // makeLogicalControlGroup copies a vault.ControlGroup to a logical.ControlGroup
-func makeLogicalControlGroup(authResultsControlGroup *ControlGroup) *logical.ControlGroup {
+func makeLogicalControlGroup(authResultsControlGroup *policy.ControlGroup) *logical.ControlGroup {
 	if authResultsControlGroup == nil {
 		return nil
 	}
