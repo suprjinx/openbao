@@ -24,6 +24,7 @@ import (
 	"github.com/openbao/openbao/helper/namespace"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/openbao/openbao/vault/barrier"
+	"github.com/openbao/openbao/vault/policy"
 )
 
 // Namespace id length; upstream uses 5 characters so we use one more to
@@ -53,10 +54,11 @@ const (
 	// overhead.
 	nsMaxWorkers = 2 + /* namespace and overhead */
 		1 + /* policies */
-		2 + /* auth + mount */
+		3 + /* reload + auth + mount */
 		1 + /* identity */
 		1 + /* quotas */
-		1 /* locked user entries */
+		1 + /* locked user entries */
+		1 /* final view clearing */
 )
 
 // NamespaceStore is used to provide durable storage of namespace. It is
@@ -614,7 +616,7 @@ func (ns *NamespaceStore) initializeNamespace(ctx context.Context, entry *namesp
 
 // initializeNamespacePolicies loads the default policies for the namespace store.
 func (ns *NamespaceStore) initializeNamespacePolicies(ctx context.Context) error {
-	if err := ns.core.policyStore.loadDefaultPolicies(ctx); err != nil {
+	if err := ns.core.policyStore.LoadDefaultPolicies(ctx); err != nil {
 		return fmt.Errorf("error creating default policies: %w", err)
 	}
 	return nil
@@ -1078,6 +1080,19 @@ func (ns *NamespaceStore) clearNamespaceResources(nsCtx context.Context, parent,
 		return err
 	}
 
+	if updateStorage {
+		// To clear auth+secret mounts, we first need to load that portion of the
+		// mount table that this namespace has. Otherwise, things like lease cleanup
+		// will not run if the mount was not already loaded.
+		nonTaintedNs := entry.Clone(false)
+		nonTaintedNs.Tainted = false
+		nonTaintedCtx := namespace.ContextWithNamespace(nsCtx, nonTaintedNs)
+
+		if err := ns.core.reloadNamespaceMounts(nonTaintedCtx, entry.UUID, false /* not yet deleted */); err != nil {
+			return fmt.Errorf("failed to reload namespace mounts: %w", err)
+		}
+	}
+
 	// clear auth mounts
 	ns.core.authLock.Lock()
 	authMountEntries, err := ns.core.auth.FindAllNamespaceMounts(nsCtx)
@@ -1131,27 +1146,45 @@ func (ns *NamespaceStore) clearNamespaceResources(nsCtx context.Context, parent,
 		if _, err := ns.core.runLockedUserEntryUpdatesForNamespace(nsCtx, entry, true); err != nil {
 			return fmt.Errorf("failed to clean up locked user entries: %w", err)
 		}
+
+		// clear any remaining storage; while ideally this would not occur, it
+		// gives us now a signal if it did (debug entries) and additionally
+		// gives us a clear path to remediate.
+		//
+		// This is in contrast to the current method where storage entries would
+		// be silently left lying around.
+		view := ns.core.NamespaceView(entry)
+		if err := logical.ScanViewPaginated(nsCtx, view, ns.logger, logical.DefaultScanViewPageLimit, func(page int, index int, path string) (cont bool, err error) {
+			if err := view.Delete(nsCtx, path); err != nil {
+				return false, fmt.Errorf("failed removing entry: %w", err)
+			}
+
+			ns.logger.Debug("bug: removing entry remaining in namespace storage after all mounts were removed", "namespace", entry.Path, "path", path)
+			return true, nil
+		}); err != nil {
+			return fmt.Errorf("failed to clear namespace view: %w", err)
+		}
 	}
 
 	return nil
 }
 
 func (ns *NamespaceStore) clearNamespacePolicies(ctx context.Context, namespace *namespace.Namespace, physicalDeletion bool) error {
-	policiesToClear, err := ns.core.policyStore.ListPolicies(ctx, PolicyTypeACL, false)
+	policiesToClear, err := ns.core.policyStore.ListPolicies(ctx, policy.TypeACL, false)
 	if err != nil {
 		ns.logger.Error("failed to retrieve namespace policies", "namespace", namespace.Path, "error", err.Error())
 		return err
 	}
 
-	for _, policy := range policiesToClear {
+	for _, pol := range policiesToClear {
 		if physicalDeletion {
-			if err := ns.core.policyStore.deletePolicyForce(ctx, policy, PolicyTypeACL); err != nil {
-				ns.logger.Error(fmt.Sprintf("failed to delete policy %q", policy), "namespace", namespace.Path, "error", err.Error())
+			if err := ns.core.policyStore.DeletePolicyForce(ctx, pol, policy.TypeACL); err != nil {
+				ns.logger.Error(fmt.Sprintf("failed to delete policy %q", pol), "namespace", namespace.Path, "error", err.Error())
 				return err
 			}
 		} else {
-			if err := ns.core.policyStore.invalidate(ctx, policy, PolicyTypeACL); err != nil {
-				ns.logger.Error(fmt.Sprintf("failed to invalidate policy %q", policy), "namespace", namespace.Path, "error", err.Error())
+			if err := ns.core.policyStore.Invalidate(ctx, pol, policy.TypeACL); err != nil {
+				ns.logger.Error(fmt.Sprintf("failed to invalidate policy %q", pol), "namespace", namespace.Path, "error", err.Error())
 				return err
 			}
 		}

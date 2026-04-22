@@ -40,6 +40,8 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 	be "github.com/openbao/openbao/vault/backend"
 	"github.com/openbao/openbao/vault/barrier"
+	"github.com/openbao/openbao/vault/policy"
+	"github.com/openbao/openbao/vault/policy/policytest"
 	"github.com/openbao/openbao/vault/routing"
 	"github.com/stretchr/testify/require"
 )
@@ -784,6 +786,14 @@ func TestTokenStore_AccessorIndex(t *testing.T) {
 	c, _, _ := TestCoreUnsealed(t)
 	ts := c.tokenStore
 
+	ns1 := &namespace.Namespace{
+		Path: "ns1",
+	}
+	ns2 := &namespace.Namespace{
+		Path: "ns1/ns2",
+	}
+	TestCoreCreateNamespaces(t, c, ns1, ns2)
+
 	ent := &logical.TokenEntry{
 		Path:        "test",
 		Policies:    []string{"dev", "ops"},
@@ -812,6 +822,24 @@ func TestTokenStore_AccessorIndex(t *testing.T) {
 	if aEntry.TokenID != ent.ID {
 		t.Fatalf("bad: got\n%s\nexpected\n%s\n", aEntry.TokenID, ent.ID)
 	}
+
+	// Verify we can't do cross-namespace token lookups.
+	aEntry, err = ts.lookupByAccessor(namespace.ContextWithNamespace(ctx, ns1), out.Accessor, false, false)
+	require.Error(t, err, "successfully looked up accessor: %v", out.Accessor)
+	require.Nil(t, aEntry)
+
+	ent2 := *ent
+	ent2.ID = ""
+	ent2.NamespaceID = ns1.ID
+	testMakeTokenDirectly(t, ctx, ts, &ent2)
+
+	aEntry, err = ts.lookupByAccessor(ctx, ent2.Accessor, false, false)
+	require.Error(t, err)
+	require.Nil(t, aEntry)
+
+	aEntry, err = ts.lookupByAccessor(namespace.ContextWithNamespace(ctx, ns2), ent2.Accessor, false, false)
+	require.Error(t, err)
+	require.Nil(t, aEntry)
 
 	// Make sure a batch token doesn't get an accessor
 	ent.Type = logical.TokenTypeBatch
@@ -1877,7 +1905,7 @@ func TestTokenStore_HandleRequest_NonAssignable(t *testing.T) {
 		t.Fatalf("err: %v\nresp: %#v", err, resp)
 	}
 
-	req.Data["policies"] = []string{"default", "foo", responseWrappingPolicyName}
+	req.Data["policies"] = []string{"default", "foo", policy.ResponseWrappingPolicyName}
 
 	resp, err = ts.HandleRequest(namespace.RootContext(t.Context()), req)
 	if err != nil {
@@ -2221,7 +2249,7 @@ func TestTokenStore_HandleRequest_CreateToken_NonRoot_RootChild(t *testing.T) {
 	ts := core.tokenStore
 	ps := core.policyStore
 
-	policy, _ := ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
+	policy, _ := policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
 	policy.Name = "test1"
 	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
 		t.Fatal(err)
@@ -3759,21 +3787,21 @@ func TestTokenStore_RoleDisallowedPolicies(t *testing.T) {
 	ps := core.policyStore
 
 	// Create 3 different policies
-	policy, _ := ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test1"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ := policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test1"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, _ = ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test2"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ = policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test2"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, _ = ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test3"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ = policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test3"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4027,27 +4055,27 @@ func TestTokenStore_RoleDisallowedPoliciesGlob(t *testing.T) {
 	ps := core.policyStore
 
 	// Create 4 different policies
-	policy, _ := ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test1"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ := policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test1"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, _ = ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test2"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ = policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test2"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, _ = ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test3"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ = policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test3"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, _ = ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
-	policy.Name = "test3b"
-	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
+	pol, _ = policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
+	pol.Name = "test3b"
+	if err := ps.SetPolicy(namespace.RootContext(t.Context()), pol, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -5337,7 +5365,7 @@ func TestTokenStore_NoDefaultPolicy(t *testing.T) {
 	core, _, root := TestCoreUnsealed(t)
 	ts := core.tokenStore
 	ps := core.policyStore
-	policy, _ := ParseACLPolicy(namespace.RootNamespace, tokenCreationPolicy)
+	policy, _ := policy.ParseACLPolicy(namespace.RootNamespace, policytest.TokenCreationPolicy)
 	policy.Name = "policy1"
 	if err := ps.SetPolicy(namespace.RootContext(t.Context()), policy, nil); err != nil {
 		t.Fatal(err)

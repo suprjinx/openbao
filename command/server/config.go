@@ -84,6 +84,9 @@ type Config struct {
 	PluginAutoRegister     bool            `hcl:"-"`
 	PluginAutoRegisterRaw  interface{}     `hcl:"plugin_auto_register"`
 
+	PluginDownloadMaxSize    int64       `hcl:"-"`
+	PluginDownloadMaxSizeRaw interface{} `hcl:"plugin_download_max_size"`
+
 	EnableIntrospectionEndpoint    bool        `hcl:"-"`
 	EnableIntrospectionEndpointRaw interface{} `hcl:"introspection_endpoint,alias:EnableIntrospectionEndpoint"`
 
@@ -147,6 +150,10 @@ type Config struct {
 	// workflow author would have to embed a token, these still should be used
 	// with care.
 	AllowUnauthenticatedWorkflows bool `hcl:"allow_unauthenticated_workflows"`
+
+	// Whether to allow unsafe (usually URL encoded) relative request paths
+	// (containing `..`).
+	UnsafeRelativePaths bool `hcl:"unsafe_relative_paths"`
 }
 
 func (c *Config) Validate(sourceFilePath string) []configutil.ConfigError {
@@ -165,6 +172,9 @@ func (c *Config) Validate(sourceFilePath string) []configutil.ConfigError {
 	}
 	for _, p := range c.Plugins {
 		results = append(results, p.Validate(sourceFilePath)...)
+	}
+	for _, o := range c.Initialization {
+		results = append(results, o.ValidateUnused(sourceFilePath)...)
 	}
 
 	// Validate plugin_download_behavior
@@ -688,6 +698,12 @@ func (c *Config) Merge(c2 *Config) *Config {
 		result.PluginAutoRegisterRaw = c2.PluginAutoRegisterRaw
 	}
 
+	result.PluginDownloadMaxSize = c.PluginDownloadMaxSize
+	if c2.PluginAutoDownloadRaw != nil {
+		result.PluginDownloadMaxSize = c2.PluginDownloadMaxSize
+		result.PluginDownloadMaxSizeRaw = c2.PluginDownloadMaxSizeRaw
+	}
+
 	return result
 }
 
@@ -1032,6 +1048,14 @@ func ParseConfig(d, source string) (*Config, error) {
 			return nil, err
 		}
 		result.PluginAutoRegister = autoRegister
+	}
+
+	if result.PluginDownloadMaxSizeRaw != nil {
+		maxSize, err := parseutil.ParseInt(result.PluginDownloadMaxSizeRaw)
+		if err != nil {
+			return nil, err
+		}
+		result.PluginDownloadMaxSize = maxSize
 	}
 
 	// Remove all unused keys from Config that were satisfied by SharedConfig.
