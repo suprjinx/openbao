@@ -1120,7 +1120,6 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 				}
 			}
 		}
-
 	}
 
 	var nonHMACReqDataKeys []string
@@ -1168,7 +1167,7 @@ func (c *Core) isLoginRequest(ctx context.Context, req *logical.Request) bool {
 
 // needsApproval will assess if a ControlGroup policy is applicable, so that request is deferred until unwrap
 func (c *Core) needsApproval(ctx context.Context, req *logical.Request, auth *logical.Auth) bool {
-	resp := false
+	var resp bool = false
 	if auth.PolicyResults != nil &&
 		auth.PolicyResults.ControlGroup != nil &&
 		req.ForwardedFrom != forwardedFromDeferral {
