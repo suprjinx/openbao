@@ -102,7 +102,7 @@ func TestControlGroup_setControlGroup(t *testing.T) {
 
 	ctx := namespace.RootContext(context.Background())
 	testMakeTokenDirectly(t, ctx, c.tokenStore, te)
-	require.NotEmpty(t, te.ID)                 // id has been created
+	require.NotEmpty(t, te.ID)                         // id has been created
 	require.Empty(t, te.InternalMeta["control_group"]) // no control group
 
 	cg := logical.ControlGroup{
