@@ -8,17 +8,18 @@ import (
 	"github.com/openbao/openbao/helper/namespace"
 	"github.com/openbao/openbao/sdk/v2/helper/jsonutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/openbao/openbao/vault/policy"
 	"github.com/stretchr/testify/require"
 )
 
 func TestControlGroup_makeLogicalControlGroup(t *testing.T) {
-	input := &ControlGroup{
+	input := &policy.ControlGroup{
 		TTL: 14440,
-		Factors: []ControlGroupFactor{
+		Factors: []policy.ControlGroupFactor{
 			{
 				Name:                   "tester",
 				ControlledCapabilities: []logical.Operation{logical.CreateOperation},
-				Identity: ControlGroupIdentity{
+				Identity: policy.ControlGroupIdentity{
 					GroupNames: []string{"admin"},
 					Approvals:  2,
 				},
@@ -65,16 +66,18 @@ func TestControlGroup_getControlGroup(t *testing.T) {
 		NumUses:        3,
 		ExplicitMaxTTL: time.Hour,
 		NamespaceID:    "root",
-		Meta: map[string]string{
-			"ttl":           "600s",
+		InternalMeta: map[string]string{
 			"control_group": string(cg),
+		},
+		Meta: map[string]string{
+			"ttl": "600s",
 		},
 	}
 
 	testMakeTokenDirectly(t, ctx, c.tokenStore, &te)
 	require.NotEmpty(t, te.ID)
 
-	// Fetch control group via token
+	// Extract control group from token entry
 	fetchedCG, err := c.getControlGroupFromTokenEntry(ctx, &te)
 	require.Nil(t, err)
 	require.Equal(t, &originalCG, fetchedCG)
@@ -100,7 +103,7 @@ func TestControlGroup_setControlGroup(t *testing.T) {
 	ctx := namespace.RootContext(context.Background())
 	testMakeTokenDirectly(t, ctx, c.tokenStore, te)
 	require.NotEmpty(t, te.ID)                 // id has been created
-	require.Empty(t, te.Meta["control_group"]) // no control group
+	require.Empty(t, te.InternalMeta["control_group"]) // no control group
 
 	cg := logical.ControlGroup{
 		TTL: time.Duration(14440),
@@ -296,7 +299,7 @@ func TestControlGroup_validateControlGroup(t *testing.T) {
 	auth.DisplayName = "different.user@example.com"
 	err = c.addAuthorization(ctx, te.ID, &auth)
 	require.Nil(t, err)
-	
+
 	// now validates for Read
 	te, err = c.tokenStore.lookupInternal(ctx, te.ID, false, false)
 	require.Nil(t, err)
