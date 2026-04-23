@@ -1167,13 +1167,12 @@ func (c *Core) isLoginRequest(ctx context.Context, req *logical.Request) bool {
 
 // needsApproval will assess if a ControlGroup policy is applicable, so that request is deferred until unwrap
 func (c *Core) needsApproval(ctx context.Context, req *logical.Request, auth *logical.Auth) bool {
-	var resp bool = false
 	if auth.PolicyResults != nil &&
 		auth.PolicyResults.ControlGroup != nil &&
 		req.ForwardedFrom != forwardedFromDeferral {
-		resp = true
+		return true
 	}
-	return resp
+	return false
 }
 
 func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp *logical.Response, retAuth *logical.Auth, retErr error) {
