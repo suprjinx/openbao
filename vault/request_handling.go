@@ -1313,7 +1313,7 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 	// Route the request
 	var routeErr error
 	var resp *logical.Response
-	if c.needsApproval(ctx, req, auth) {
+	if !c.needsApproval(ctx, req, auth) {
 		resp, routeErr = c.doRouting(ctx, req)
 	}
 	if resp != nil {
