@@ -1030,16 +1030,14 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 		resp.WrapInfo.Token == ""
 
 	if wrapping {
-
-		// Obtain identity info for wrapping token metadata
-		_, _, authEntity, _, err := c.fetchACLTokenEntryAndEntity(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-
 		extraData := map[string]string{}
 		// For controlgroup, store the original request and control group details with the cubbyhole data
 		if auth.PolicyResults != nil && auth.PolicyResults.ControlGroup != nil {
+			// Obtain identity info for wrapping token metadata
+			_, _, authEntity, _, err := c.fetchACLTokenEntryAndEntity(ctx, req)
+			if err != nil {
+				return nil, err
+			}
 			reqPb, err := pb.LogicalRequestToProtoRequest(req)
 			if err != nil {
 				return resp, err
@@ -1313,6 +1311,8 @@ func (c *Core) handleRequest(ctx context.Context, req *logical.Request) (retResp
 	var resp *logical.Response
 	if !c.needsApproval(ctx, req, auth) {
 		resp, routeErr = c.doRouting(ctx, req)
+	} else {
+		resp = &logical.Response{}
 	}
 	if resp != nil {
 

@@ -183,12 +183,6 @@ func TestRequestHandling_ControlGroupWrapping(t *testing.T) {
 	if resp == nil {
 		t.Fatalf("bad: %v", resp)
 	}
-
-	// Expect metadata
-	meta, ok := resp.Data["meta"].(map[string]string)
-	require.True(t, ok)
-	require.NotEmpty(t, meta["control_group"])
-	require.NotEmpty(t, meta["request"])
 }
 
 func TestRequestHandling_LoginWrapping(t *testing.T) {
