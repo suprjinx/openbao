@@ -1046,7 +1046,7 @@ func (c *Core) handleCancelableRequest(ctx context.Context, req *logical.Request
 			if err != nil {
 				return resp, err
 			}
-			extraData["request"] = string(reqPbBytes)
+			extraData["request"] = base64.StdEncoding.EncodeToString(reqPbBytes)
 			entityJson, err := jsonutil.EncodeJSON(authEntity)
 			if err != nil {
 				return resp, err

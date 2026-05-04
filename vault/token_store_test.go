@@ -5,6 +5,7 @@ package vault
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,16 +33,19 @@ import (
 	"github.com/openbao/openbao/helper/testhelpers/corehelpers"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/helper/consts"
+	"github.com/openbao/openbao/sdk/v2/helper/jsonutil"
 	"github.com/openbao/openbao/sdk/v2/helper/locksutil"
 	"github.com/openbao/openbao/sdk/v2/helper/testhelpers/schema"
 	"github.com/openbao/openbao/sdk/v2/helper/tokenutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/openbao/openbao/sdk/v2/plugin/pb"
 	be "github.com/openbao/openbao/vault/backend"
 	"github.com/openbao/openbao/vault/barrier"
 	"github.com/openbao/openbao/vault/policy"
 	"github.com/openbao/openbao/vault/policy/policytest"
 	"github.com/openbao/openbao/vault/routing"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTokenStore_CreateOrphanResponse(t *testing.T) {
@@ -891,36 +895,111 @@ func TestTokenStore_HandleRequest_LookupAccessor(t *testing.T) {
 }
 
 func TestTokenStore_HandleRequest_ApproveAccessor(t *testing.T) {
-	c, _, root := TestCoreUnsealed(t)
+	c, _, _ := TestCoreUnsealed(t)
 	ts := c.tokenStore
+	is := c.identityStore
 	ctx := namespace.RootContext(context.Background())
 
-	testMakeServiceTokenViaBackend(t, ts, root, "tokenid", "60s", []string{"foo"})
-	out, err := ts.Lookup(ctx, "tokenid")
+	pol, err := policy.ParseACLPolicy(namespace.RootNamespace, `
+path "sys/control-group/authorize" {
+  capabilities = ["update"]
+}
+`)
+	require.NoError(t, err)
+	pol.Name = "approver-path-update"
+
+	err = c.policyStore.SetPolicy(ctx, pol, nil)
+	require.NoError(t, err)
+
+	// Entity and groups for requester and approver
+	approverEntityID := "approver-entity"
+	approverEntity := identity.Entity{
+		ID:          approverEntityID,
+		Name:        "approver",
+		NamespaceID: namespace.RootNamespaceID,
+		BucketKey:   is.EntityPacker(ctx).BucketKey(approverEntityID),
+	}
+	requestingEntityID := "requesting-entity"
+	requestingEntity := identity.Entity{
+		ID:          requestingEntityID,
+		Name:        "requester",
+		NamespaceID: namespace.RootNamespaceID,
+		BucketKey:   is.EntityPacker(ctx).BucketKey(requestingEntityID),
+	}
+
+	txn := is.Txn(ctx, true)
+	require.NoError(t, is.MemDBUpsertEntityInTxn(txn, &approverEntity))
+	require.NoError(t, is.MemDBUpsertGroupInTxn(txn, &identity.Group{
+		ID:              "secops-id",
+		Name:            "secops",
+		NamespaceID:     namespace.RootNamespaceID,
+		MemberEntityIDs: []string{approverEntityID},
+		BucketKey:       is.GroupPacker(ctx).BucketKey("secops-id"),
+	}))
+	txn.Commit()
+
+	// wrapping token, with mocked InternalMeta
+	extraData := map[string]string{}
+	req := logical.TestRequest(t, logical.ReadOperation, "some/protected/resource")
+	reqPb, err := pb.LogicalRequestToProtoRequest(req)
+	require.Nil(t, err)
+	reqPbBytes, err := proto.Marshal(reqPb)
+	require.Nil(t, err)
+	extraData["request"] = base64.StdEncoding.EncodeToString(reqPbBytes)
+	entityJson, err := jsonutil.EncodeJSON(requestingEntity)
+	require.Nil(t, err)
+	extraData["request_entity"] = string(entityJson)
+	// extraData["control_group"] = nil
+
+	te := logical.TokenEntry{
+		ID:           "wrapping-token",
+		EntityID:     "wrapping-entity",
+		Policies:     []string{},
+		TTL:          time.Minute * 1,
+		InternalMeta: extraData,
+	}
+	testMakeTokenDirectly(t, ctx, ts, &te)
+
+	// approver token
+	te = logical.TokenEntry{
+		ID:       "approver-token",
+		EntityID: approverEntityID,
+		Policies: []string{"approver-path-update"},
+		TTL:      time.Minute * 1,
+	}
+	testMakeTokenDirectly(t, ctx, ts, &te)
+
+	wrapped, err := ts.Lookup(ctx, "wrapping-token")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
-	if out == nil {
+	if wrapped == nil {
 		t.Fatalf("err: %s", err)
 	}
-
+	approver, err := ts.Lookup(ctx, "approver-token")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if approver == nil {
+		t.Fatalf("err: %s", err)
+	}
 	// if token has no control group, expect no error
-	req := logical.TestRequest(t, logical.UpdateOperation, "approve-accessor")
+	req = logical.TestRequest(t, logical.UpdateOperation, "sys/control-group/authorize")
 	req.Data = map[string]interface{}{
-		"accessor": out.Accessor,
+		"accessor": wrapped.Accessor,
 	}
-	req.Auth = &logical.Auth{}
+	req.ClientToken = "approver-token"
 
-	resp, err := ts.HandleRequest(ctx, req)
+	resp, err := c.HandleRequest(ctx, req)
 	if err != nil {
-		t.Fatalf("err: %s", err)
+		t.Fatalf("err: %s; resp: %+v", err, resp)
 	}
 	if resp.Data == nil {
-		t.Fatal("response should contain data")
+		t.Fatalf("response should contain data; resp: %+v", resp)
 	}
 
-	if resp.Data["accessor"].(string) == "" {
-		t.Fatal("accessor should not be empty")
+	if resp.Data["approved"] == nil {
+		t.Fatalf("response should contain approved result; resp: %+v", resp)
 	}
 
 	// if token has control group, expect change to meta data
@@ -952,7 +1031,7 @@ func TestTokenStore_HandleRequest_ApproveAccessor(t *testing.T) {
 	}
 
 	// Set control group meta info on token
-	err = c.setControlGroupInTokenEntry(ctx, out, &cg)
+	err = c.setControlGroupInTokenEntry(ctx, wrapped, &cg)
 	require.Nil(t, err)
 
 	// addAuthorzation
@@ -963,14 +1042,14 @@ func TestTokenStore_HandleRequest_ApproveAccessor(t *testing.T) {
 	req.Auth = &logical.Auth{
 		GroupAliases: groups,
 	}
-	resp, err = ts.HandleRequest(ctx, req)
+	resp, err = c.HandleRequest(ctx, req)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
 	require.NotEmpty(t, resp)
 
 	// Token entry should now have the authorization
-	cgFetched, err := c.getControlGroup(ctx, "tokenid")
+	cgFetched, err := c.getControlGroup(ctx, "wrapping-token")
 	require.Nil(t, err)
 
 	// expect all matching factors to receive an authorization

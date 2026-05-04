@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -86,18 +87,23 @@ func makeLogicalControlGroup(authResultsControlGroup *policy.ControlGroup) *logi
 
 // getRequestFromTokenEntry fetchest original request from tokenEntry
 func (c *Core) getRequestFromTokenEntry(ctx context.Context, tokenEntry *logical.TokenEntry) (*logical.Request, error) {
-	reqBytes, ok := tokenEntry.InternalMeta["request"]
+	reqProtoBase64, ok := tokenEntry.InternalMeta["request"]
 	if !ok {
-		return nil, errors.New("token meta does not contain request")
+		return nil, errors.New("token internal meta does not contain request")
 	}
 
-	var reqPb *pb.Request
+	reqBytes, err := base64.StdEncoding.DecodeString(reqProtoBase64)
+	if err != nil {
+		return nil, fmt.Errorf("token internal meta request doesn't decode: %w", err)
+	}
+
+	reqPb := pb.Request{}
 	var req *logical.Request
-	if err := proto.Unmarshal([]byte(reqBytes), reqPb); err != nil {
+	if err := proto.Unmarshal([]byte(reqBytes), &reqPb); err != nil {
 		return nil, err
 	}
 
-	req, err := pb.ProtoRequestToLogicalRequest(reqPb)
+	req, err = pb.ProtoRequestToLogicalRequest(&reqPb)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +228,11 @@ func (c *Core) addAuthorization(ctx context.Context, token string, approver *log
 		return err
 	}
 
+	originalEntity, err := c.getEntityFromTokenEntry(ctx, tokenEntry)
+	if err != nil {
+		return err
+	}
+
 	// if there's no control group, no action taken but not an error
 	if cg == nil {
 		return nil
@@ -233,7 +244,7 @@ func (c *Core) addAuthorization(ctx context.Context, token string, approver *log
 		for _, group := range approver.GroupAliases {
 			if slices.Contains(identityGroups, group.Name) {
 				// make sure token doesn't have same identity as approver
-				if tokenEntry.DisplayName == approver.DisplayName {
+				if originalEntity.ID == approver.EntityID {
 					return fmt.Errorf("token owner cannot be approver")
 				}
 
@@ -298,7 +309,7 @@ func (c *Core) handleControlGroupRequest(ctx context.Context, req *logical.Reque
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
 
-	cg, err := c.getControlGroupFromTokenEntry(ctx, out)
+	_, err = c.getControlGroupFromTokenEntry(ctx, out)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
@@ -308,6 +319,8 @@ func (c *Core) handleControlGroupRequest(ctx context.Context, req *logical.Reque
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
 
+	auths := []logical.ControlGroupAuthorization{} //cg.CollectAuthorizations()
+
 	// Generate a response.
 	resp := &logical.Response{
 		Data: map[string]interface{}{
@@ -315,7 +328,7 @@ func (c *Core) handleControlGroupRequest(ctx context.Context, req *logical.Reque
 			"request_operation": originalRequest.Operation,
 			"request_path":      originalRequest.Path,
 			"request_entity":    originalEntity,
-			"authorizations":    cg.Factors[0].Authorizations,
+			"authorizations":    auths,
 		},
 	}
 
@@ -339,7 +352,7 @@ func (c *Core) handleControlGroupAuthorize(ctx context.Context, req *logical.Req
 	}
 
 	// Obtain identity info for the authorizer
-	_, authorizerToken, _, _, err := c.fetchACLTokenEntryAndEntity(ctx, req)
+	_, authorizerToken, authorizerIdentity, _, err := c.fetchACLTokenEntryAndEntity(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -357,6 +370,7 @@ func (c *Core) handleControlGroupAuthorize(ctx context.Context, req *logical.Req
 		})
 	}
 	authorizerAuth := logical.Auth{
+		EntityID:     authorizerIdentity.GetID(),
 		DisplayName:  authorizerToken.DisplayName,
 		GroupAliases: authorizerGroupAliases,
 	}
