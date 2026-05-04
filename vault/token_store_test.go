@@ -900,13 +900,18 @@ func TestTokenStore_HandleRequest_ApproveAccessor(t *testing.T) {
 	is := c.identityStore
 	ctx := namespace.RootContext(context.Background())
 
-	pol, err := policy.ParseACLPolicy(namespace.RootNamespace, `
+	policyHCL := `
 path "sys/control-group/authorize" {
   capabilities = ["update"]
 }
-`)
+
+path "sys/control-group/request" {
+  capabilities = ["read"]
+}
+`
+	pol, err := policy.ParseACLPolicy(namespace.RootNamespace, policyHCL)
 	require.NoError(t, err)
-	pol.Name = "approver-path-update"
+	pol.Name = "approver-paths"
 
 	err = c.policyStore.SetPolicy(ctx, pol, nil)
 	require.NoError(t, err)
@@ -949,7 +954,6 @@ path "sys/control-group/authorize" {
 	entityJson, err := jsonutil.EncodeJSON(requestingEntity)
 	require.Nil(t, err)
 	extraData["request_entity"] = string(entityJson)
-	// extraData["control_group"] = nil
 
 	te := logical.TokenEntry{
 		ID:           "wrapping-token",
@@ -964,7 +968,7 @@ path "sys/control-group/authorize" {
 	te = logical.TokenEntry{
 		ID:       "approver-token",
 		EntityID: approverEntityID,
-		Policies: []string{"approver-path-update"},
+		Policies: []string{"approver-paths"},
 		TTL:      time.Minute * 1,
 	}
 	testMakeTokenDirectly(t, ctx, ts, &te)
@@ -1057,6 +1061,23 @@ path "sys/control-group/authorize" {
 	require.Len(t, cgFetched.Factors[0].Authorizations, 1)
 	require.Len(t, cgFetched.Factors[1].Authorizations, 0)
 	require.Len(t, cgFetched.Factors[2].Authorizations, 1)
+
+	// verify the original request state
+	viewReq := logical.TestRequest(t, logical.ReadOperation, "sys/control-group/request")
+	viewReq.ClientToken = "approver-token"
+	viewReq.Data = map[string]interface{}{
+		"accessor": wrapped.Accessor,
+	}
+	resp, err = c.HandleRequest(ctx, viewReq)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	require.NotEmpty(t, resp)
+	require.Equal(t, false, resp.Data["approved"])
+
+	auths := resp.Data["authorizations"].([]map[string]interface{})
+	require.NotEmpty(t, auths)
+	require.Equal(t, approverEntityID, auths[0]["entity_id"])
 }
 
 func TestTokenStore_HandleRequest_ListAccessors(t *testing.T) {

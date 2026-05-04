@@ -149,8 +149,9 @@ type ControlGroup struct {
 }
 
 type ControlGroupAuthorization struct {
-	Timestamp time.Time `json:"timestamp"`
-	Approver  string    `json:"approver"`
+	Timestamp  time.Time `json:"timestamp"`
+	EntityID   string    `json:"entity_id"`
+	EntityName string    `json:"entity_name"`
 }
 
 type PolicyInfo struct {
@@ -158,4 +159,15 @@ type PolicyInfo struct {
 	NamespaceId   string `json:"namespace_id"`
 	NamespacePath string `json:"namespace_path"`
 	Type          string `json:"type"`
+}
+
+func (cg *ControlGroup) Authorizations() []*ControlGroupAuthorization {
+	auths := []*ControlGroupAuthorization{}
+	for _, factor := range cg.Factors {
+		for _, approval := range factor.Authorizations {
+			// TODO dedupe this list
+			auths = append(auths, &approval)
+		}
+	}
+	return auths
 }

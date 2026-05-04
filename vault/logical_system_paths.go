@@ -4230,7 +4230,7 @@ func (b *SystemBackend) wrappingPaths() []*framework.Path {
 			},
 
 			Operations: map[logical.Operation]framework.OperationHandler{
-				logical.UpdateOperation: &framework.PathOperation{
+				logical.ReadOperation: &framework.PathOperation{
 					Callback: b.Core.handleControlGroupRequest,
 					Responses: map[int][]framework.Response{
 						http.StatusOK: {{

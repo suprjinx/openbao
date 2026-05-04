@@ -250,15 +250,16 @@ func (c *Core) addAuthorization(ctx context.Context, token string, approver *log
 
 				// make sure approver hasn't already approved
 				for _, auth := range factor.Authorizations {
-					if auth.Approver == approver.DisplayName {
+					if auth.EntityID == approver.EntityID {
 						return fmt.Errorf("approver has already authorized")
 					}
 				}
 
 				addingAuthorization = true
 				cg.Factors[i].Authorizations = append(factor.Authorizations, logical.ControlGroupAuthorization{
-					Timestamp: time.Now(),
-					Approver:  approver.DisplayName,
+					Timestamp:  time.Now(),
+					EntityName: approver.DisplayName,
+					EntityID:   approver.EntityID,
 				})
 			}
 		}
@@ -309,7 +310,7 @@ func (c *Core) handleControlGroupRequest(ctx context.Context, req *logical.Reque
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
 
-	_, err = c.getControlGroupFromTokenEntry(ctx, out)
+	cg, err := c.getControlGroupFromTokenEntry(ctx, out)
 	if err != nil {
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
@@ -319,7 +320,15 @@ func (c *Core) handleControlGroupRequest(ctx context.Context, req *logical.Reque
 		return logical.ErrorResponse(err.Error()), logical.ErrInvalidRequest
 	}
 
-	auths := []logical.ControlGroupAuthorization{} //cg.CollectAuthorizations()
+	auths := []map[string]interface{}{}
+	if cg != nil {
+		for _, approval := range cg.Authorizations() {
+			auths = append(auths, map[string]interface{}{
+				"entity_id":   approval.EntityID,
+				"entity_name": approval.EntityName,
+			})
+		}
+	}
 
 	// Generate a response.
 	resp := &logical.Response{
